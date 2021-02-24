@@ -10,6 +10,7 @@ from .constants import *
 from .errors import CodecNotSupportedError
 from .tools import VarInt
 from .messages import VoiceTarget
+from .crypto import CryptStateOCB2
 
 
 class SoundOutput:
@@ -45,6 +46,7 @@ class SoundOutput:
         self.sequence_start_time = 0  # time of sequence 1
         self.sequence_last_time = 0  # time of the last emitted packet
         self.sequence = 0  # current sequence
+        self.ocb = CryptStateOCB2()
 
     def send_audio(self):
         """send the available audio to the server, taking care of the timing"""
@@ -103,19 +105,24 @@ class SoundOutput:
             if self.mumble_object.positional:
                 udppacket += struct.pack("fff", self.mumble_object.positional[0], self.mumble_object.positional[1], self.mumble_object.positional[2])
 
-            self.Log.debug("audio packet to send: sequence:{sequence}, type:{type}, length:{len}".format(
+            self.Log.debug("{PROTO} audio packet to send: sequence:{sequence}, type:{type}, length:{len}".format(
+                PROTO='UDP' if self.mumble_object.udp_active else 'TCP',
                 sequence=self.sequence,
                 type=self.codec_type,
                 len=len(udppacket)
             ))
 
-            tcppacket = struct.pack("!HL", PYMUMBLE_MSG_TYPES_UDPTUNNEL, len(udppacket)) + udppacket  # encapsulate in tcp tunnel
+            if self.mumble_object.udp_active:
+                udp_encrypted_packet = self.ocb.encrypt(udppacket)
+                self.mumble_object.media_socket.sendto(udp_encrypted_packet, (self.mumble_object.host, self.mumble_object.port))
+            else:
+                tcppacket = struct.pack("!HL", PYMUMBLE_MSG_TYPES_UDPTUNNEL, len(udppacket)) + udppacket  # encapsulate in tcp tunnel
 
-            while len(tcppacket) > 0:
-                sent = self.mumble_object.control_socket.send(tcppacket)
-                if sent < 0:
-                    raise socket.error("Server socket error")
-                tcppacket = tcppacket[sent:]
+                while len(tcppacket) > 0:
+                    sent = self.mumble_object.control_socket.send(tcppacket)
+                    if sent < 0:
+                        raise socket.error("Server socket error")
+                    tcppacket = tcppacket[sent:]
 
     def get_audio_per_packet(self):
         """return the configured length of a audio packet (in ms)"""

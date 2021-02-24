@@ -67,6 +67,7 @@ class Mumble(threading.Thread):
         self.keyfile = keyfile
         self.reconnect = reconnect
         self.tokens = tokens
+        self.crypt = {"key": None, "client_nonce": None, "server_nonce": None}  # UDP security informations
         self.__opus_profile = PYMUMBLE_AUDIO_TYPE_OPUS_PROFILE
         self.stereo = stereo
 
@@ -182,6 +183,26 @@ class Mumble(threading.Thread):
 
         self.connected = PYMUMBLE_CONN_STATE_AUTHENTICATING
         return self.connected
+
+    def crypt_setup(self, mess):
+        if mess.key:
+            self.crypt['key'] = mess.key
+        if mess.client_nonce:
+            self.crypt['client_nonce'] = mess.client_nonce
+        if mess.server_nonce:
+            self.crypt['server_nonce'] = mess.server_nonce
+        if self.crypt['key'] and self.crypt['client_nonce'] and self.crypt['server_nonce']:
+            self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sound_output.ocb.set_key(bytes(self.crypt['key']), bytearray(self.crypt['client_nonce']), bytearray(self.crypt['server_nonce']))
+            self.udp_active = True
+            self.send_udp_ping()
+            self.Log.debug(self.crypt)
+
+    def send_udp_ping(self):
+        h = 0x20
+        t = tools.VarInt(int(time.time()))
+        pk = struct.pack('!B', h) + t.encode()
+        self.media_socket.sendto(pk, (self.host, self.port))
 
     def loop(self):
         """
@@ -394,6 +415,7 @@ class Mumble(threading.Thread):
             mess = mumble_pb2.CryptSetup()
             mess.ParseFromString(message)
             self.Log.debug("message: CryptSetup : %s", mess)
+            self.crypt_setup(mess)
             self.ping()
 
         elif type == PYMUMBLE_MSG_TYPES_CONTEXTACTIONMODIFY:
@@ -477,6 +499,7 @@ class Mumble(threading.Thread):
         pos += 1
 
         if type == PYMUMBLE_AUDIO_TYPE_PING:
+            self.Log.debug("UDP PING RECEIVED")
             return
 
         session = tools.VarInt()  # decode session id
