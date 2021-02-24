@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import binascii
 import threading
 import logging
 import time
@@ -194,15 +195,19 @@ class Mumble(threading.Thread):
         if self.crypt['key'] and self.crypt['client_nonce'] and self.crypt['server_nonce']:
             self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.sound_output.ocb.set_key(bytes(self.crypt['key']), bytearray(self.crypt['client_nonce']), bytearray(self.crypt['server_nonce']))
-            self.udp_active = True
             self.send_udp_ping()
             self.Log.debug(self.crypt)
 
     def send_udp_ping(self):
         h = 0x20
         t = tools.VarInt(int(time.time()))
-        pk = struct.pack('!B', h) + t.encode()
-        self.media_socket.sendto(pk, (self.host, self.port))
+        pk = struct.pack('!H', h) + t.encode()
+        self.Log.debug("Sending UDP PING")
+        self.media_socket.sendto(pk, (self.host, self.port))  # UDP is active only if I receive an answer
+        binascii.hexlify(pk)
+        tmp_recv = self.media_socket.recv(128)
+        print("degub")
+        # self.udp_active = True
 
     def loop(self):
         """
