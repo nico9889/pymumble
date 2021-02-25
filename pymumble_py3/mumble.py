@@ -201,20 +201,23 @@ class Mumble(threading.Thread):
 
     def send_udp_ping(self):
         h = 0x20
-        t = tools.VarInt(int(time.time()))
+        t = tools.VarInt(int(time.time())).encode()
         pk = struct.pack('!i', h) + t
-        self.Log.debug("Sending UDP PING")
-        
+        pk_encrypt = self.sound_output.ocb.encrypt(pk)
+
         try:
-            self.media_socket.sendto(pk, (self.host, self.port))
+            self.media_socket.sendto(pk_encrypt, (self.host, self.port))
+            self.Log.debug("Sending UDP PING")
+
         except (socket.gaierror, socket.timeout) as e:
-            continue
+            self.Log.error(e)
         try:
             data, addr = self.media_socket.recvfrom(1024)
             # self.udp_active = True # UDP is active only if I receive an answer
+            print('debug ping' + data.decode())
+
         except socket.timeout:
-            continue
-        print('debug ping' + data)
+            self.Log.error("Socket UDP ping timeout")
 
     def loop(self):
         """
