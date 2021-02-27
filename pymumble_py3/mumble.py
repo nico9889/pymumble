@@ -209,17 +209,15 @@ class Mumble(threading.Thread):
     def crypt_setup(self, mess):
         if mess.key and mess.client_nonce and mess.server_nonce:
             self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.media_socket.settimeout(3)
+            self.media_socket.settimeout(6)
             self.ocb.set_key(bytes(mess.key), encrypt_iv=bytearray(mess.server_nonce), decrypt_iv=bytearray(mess.client_nonce))
             self.send_udp_ping()
         else:
             raise ConnectionError
 
     def send_udp_ping(self):
-        h = 0x20
-        t = tools.VarInt(int(time.time())).encode()
-        pk = struct.pack('>i', h) + t
-        pk_encrypt = self.ocb.encrypt(pk)
+        ping = b'\x20' + tools.VarInt(int(time.time())).encode()
+        pk_encrypt = self.ocb.encrypt(ping)
 
         try:
             self.media_socket.sendto(pk_encrypt, (self.host, self.port))
@@ -228,12 +226,14 @@ class Mumble(threading.Thread):
         except (socket.gaierror, socket.timeout) as e:
             self.Log.error(e)
         try:
-            data, addr = self.media_socket.recvfrom(1024)
+            data, addr = self.media_socket.recvfrom(2048)
             # self.udp_active = True # UDP is active only if I receive an answer
-            print('debug ping' + data.decode())
+            print('debug ping' + self.ocb.decrypt(data))
 
         except socket.timeout:
+            self.media_socket.close()
             self.Log.error("Socket UDP ping timeout")
+        print('rest')
 
     def loop(self):
         """
