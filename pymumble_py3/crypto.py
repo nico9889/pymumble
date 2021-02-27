@@ -244,6 +244,7 @@ def ocb_encrypt(aes: object,
         aes: AES-ECB cipher object
         plain: The plaintext bytes to be encrypted
         nonce: The encryption IV
+        insecure: Disable checks if attack is possible
 
     Returns:
         Encrypted (ciphertext) bytes and tag
