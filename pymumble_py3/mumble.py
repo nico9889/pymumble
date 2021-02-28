@@ -204,20 +204,26 @@ class Mumble(threading.Thread):
             return self.connected
 
         self.connected = PYMUMBLE_CONN_STATE_AUTHENTICATING
+        self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Initiate a fake socket for UDP
         return self.connected
 
     def crypt_setup(self, mess):
         if mess.key and mess.client_nonce and mess.server_nonce:
             self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.media_socket.settimeout(6)
-            self.ocb.set_key(bytes(mess.key), encrypt_iv=bytearray(mess.server_nonce), decrypt_iv=bytearray(mess.client_nonce))
-            self.send_udp_ping()
+            self.media_socket.settimeout(3)
+            self.ocb.set_key(bytes(mess.key), encrypt_iv=bytearray(mess.client_nonce), decrypt_iv=bytearray(mess.server_nonce))
+            self.udp_ping()
+            self.udp_active = True  # UDP is active only if I receive an answer
+
         else:
             raise ConnectionError
 
-    def send_udp_ping(self):
+    def udp_ping(self):
         ping = b'\x20' + tools.VarInt(int(time.time())).encode()
-        pk_encrypt = self.ocb.encrypt(ping)
+        self.send_udp(ping)
+
+    def send_udp(self, msg):
+        pk_encrypt = self.ocb.encrypt(msg)
 
         try:
             self.media_socket.sendto(pk_encrypt, (self.host, self.port))
@@ -225,15 +231,6 @@ class Mumble(threading.Thread):
 
         except (socket.gaierror, socket.timeout) as e:
             self.Log.error(e)
-        try:
-            data, addr = self.media_socket.recvfrom(2048)
-            # self.udp_active = True # UDP is active only if I receive an answer
-            print('debug ping' + self.ocb.decrypt(data))
-
-        except socket.timeout:
-            self.media_socket.close()
-            self.Log.error("Socket UDP ping timeout")
-        print('rest')
 
     def loop(self):
         """
@@ -260,13 +257,21 @@ class Mumble(threading.Thread):
 
                 self.sound_output.send_audio()  # send outgoing audio if available
 
-            (rlist, wlist, xlist) = select.select([self.control_socket], [], [self.control_socket], self.loop_rate)  # wait for a socket activity
+            (rlist, wlist, xlist) = select.select([self.control_socket, self.media_socket], [], [self.control_socket, self.media_socket], self.loop_rate)  # wait for a socket activity
 
             if self.control_socket in rlist:  # something to be read on the control socket
                 self.read_control_messages()
             elif self.control_socket in xlist:  # socket was closed
                 self.control_socket.close()
                 self.connected = PYMUMBLE_CONN_STATE_NOT_CONNECTED
+
+            if self.media_socket in rlist:
+                self.media_socket.recvfrom(2048)
+                self.Log.debug("received UDP message")
+                self.read_udp_packet()
+            elif self.media_socket in xlist:  # socket was closed
+                self.media_socket.close()
+                self.udp_active = False
 
     def ping(self):
         """Send the keepalive through available channels"""
@@ -309,6 +314,35 @@ class Mumble(threading.Thread):
             if sent < 0:
                 raise socket.error("Server socket error")
             packet = packet[sent:]
+
+    def read_udp_packet(self):
+        encrypted_buffer = None
+        try:
+            encrypted_buffer = self.media_socket.recv(PYMUMBLE_READ_BUFFER_SIZE)
+        except socket.error:
+            pass
+
+        receive_buffer = self.ocb.decrypt(encrypted_buffer, len(encrypted_buffer))
+
+        while len(receive_buffer) >= 6:  # header is present (type + length)
+            self.Log.debug("read control connection")
+            header = receive_buffer[0:6]
+
+            if len(header) < 6:
+                break
+
+            (msg_type, size) = struct.unpack("!HL", header)  # decode header
+
+            if len(receive_buffer) < size + 6:  # if not length data, read further
+                break
+
+            # self.Log.debug("message received : " + tohex(self.receive_buffer[0:size+6]))  # for debugging
+
+            message = receive_buffer[6:size + 6]  # get the control message
+            receive_buffer = receive_buffer[size + 6:]  # remove from the buffer the read part
+
+            if msg_type == PYMUMBLE_MSG_TYPES_UDPTUNNEL:  # audio encapsulated in control message
+                self.sound_received(message)
 
     def read_control_messages(self):
         """Read control messages coming from the server"""
