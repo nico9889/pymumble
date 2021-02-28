@@ -204,23 +204,31 @@ class Mumble(threading.Thread):
             return self.connected
 
         self.connected = PYMUMBLE_CONN_STATE_AUTHENTICATING
-        self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Initiate a fake socket for UDP
+        self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)  # Perpare UDP socket
         return self.connected
 
     def crypt_setup(self, mess):
         if mess.key and mess.client_nonce and mess.server_nonce:
-            self.media_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.media_socket.settimeout(3)
+            self.media_socket.settimeout(6)
             self.ocb.set_key(bytes(mess.key), encrypt_iv=bytearray(mess.client_nonce), decrypt_iv=bytearray(mess.server_nonce))
-            self.udp_ping()
-            self.udp_active = True  # UDP is active only if I receive an answer
-
+            if self.udp_ping():
+                self.media_socket.settimeout(None)
+                self.udp_active = True  # UDP is active only if I receive an answer
         else:
             raise ConnectionError
 
     def udp_ping(self):
         ping = b'\x20' + tools.VarInt(int(time.time())).encode()
         self.send_udp(ping)
+        try:
+            response, sender = self.media_socket.recvfrom(2048)
+        except socket.timeout:
+            self.media_socket.close()
+            self.Log.warning("Timed out waiting for UDP ping response from server. Using TCP for audio traffic.")
+            self.udp_active = False
+            return False
+        self.ocb.decrypt(response)
+        return True
 
     def send_udp(self, msg):
         pk_encrypt = self.ocb.encrypt(msg)
@@ -257,7 +265,10 @@ class Mumble(threading.Thread):
 
                 self.sound_output.send_audio()  # send outgoing audio if available
 
-            (rlist, wlist, xlist) = select.select([self.control_socket, self.media_socket], [], [self.control_socket, self.media_socket], self.loop_rate)  # wait for a socket activity
+            if self.udp_active:
+                (rlist, wlist, xlist) = select.select([self.control_socket, self.media_socket], [], [self.control_socket, self.media_socket], self.loop_rate)  # wait for a socket activity
+            else:
+                (rlist, wlist, xlist) = select.select([self.control_socket], [], [self.control_socket], self.loop_rate)  # wait for a socket activity
 
             if self.control_socket in rlist:  # something to be read on the control socket
                 self.read_control_messages()
