@@ -211,15 +211,11 @@ class Mumble(threading.Thread):
         if mess.key and mess.client_nonce and mess.server_nonce:
             self.media_socket.settimeout(6)
             self.ocb.set_key(bytes(mess.key), encrypt_iv=bytearray(mess.client_nonce), decrypt_iv=bytearray(mess.server_nonce))
-            if self.udp_ping():
-                self.media_socket.settimeout(None)
-                self.udp_active = True  # UDP is active only if I receive an answer
         else:
             raise ConnectionError
 
-    def udp_ping(self):
-        ping = b'\x20' + tools.VarInt(int(time.time())).encode()
-        self.send_udp(ping)
+        self.ping(udp=True)
+
         try:
             response, sender = self.media_socket.recvfrom(2048)
         except socket.timeout:
@@ -228,15 +224,15 @@ class Mumble(threading.Thread):
             self.udp_active = False
             return False
         self.ocb.decrypt(response)
-        return True
 
-    def send_udp(self, msg):
+        self.media_socket.settimeout(None)
+        self.udp_active = True  # UDP is active only if I receive an answer
+
+    def send_packet_udp(self, msg):
         pk_encrypt = self.ocb.encrypt(msg)
-
         try:
             self.media_socket.sendto(pk_encrypt, (self.host, self.port))
             self.Log.debug("Sending UDP PING")
-
         except (socket.gaierror, socket.timeout) as e:
             self.Log.error(e)
 
@@ -284,21 +280,25 @@ class Mumble(threading.Thread):
                 self.media_socket.close()
                 self.udp_active = False
 
-    def ping(self):
+    def ping(self, udp=False):
         """Send the keepalive through available channels"""
-        ping = mumble_pb2.Ping()
-        ping.timestamp = int(time.time())
-        ping.tcp_ping_avg = self.ping_stats['avg']
-        ping.tcp_ping_var = self.ping_stats['var']
-        ping.tcp_packets = self.ping_stats['nb']
+        if udp:
+            udp_ping_packet = b'\x20' + tools.VarInt(int(time.time())).encode()
+            self.send_packet_udp(udp_ping_packet)
+        else:
+            ping = mumble_pb2.Ping()
+            ping.timestamp = int(time.time())
+            ping.tcp_ping_avg = self.ping_stats['avg']
+            ping.tcp_ping_var = self.ping_stats['var']
+            ping.tcp_packets = self.ping_stats['nb']
 
-        self.Log.debug("sending: ping: %s", ping)
-        self.send_message(PYMUMBLE_MSG_TYPES_PING, ping)
-        self.ping_stats['time_send'] = int(time.time() * 1000)
-        self.Log.debug(self.ping_stats['last_rcv'])
-        if self.ping_stats['last_rcv'] != 0 and int(time.time() * 1000) > self.ping_stats['last_rcv'] + (60 * 1000):
-            self.Log.debug("Ping too long ! Disconnected ?")
-            self.connected = PYMUMBLE_CONN_STATE_NOT_CONNECTED
+            self.Log.debug("sending: ping: %s", ping)
+            self.send_message(PYMUMBLE_MSG_TYPES_PING, ping)
+            self.ping_stats['time_send'] = int(time.time() * 1000)
+            self.Log.debug(self.ping_stats['last_rcv'])
+            if self.ping_stats['last_rcv'] != 0 and int(time.time() * 1000) > self.ping_stats['last_rcv'] + (60 * 1000):
+                self.Log.debug("Ping too long ! Disconnected ?")
+                self.connected = PYMUMBLE_CONN_STATE_NOT_CONNECTED
 
     def ping_response(self, mess):
         self.ping_stats['last_rcv'] = int(time.time() * 1000)
