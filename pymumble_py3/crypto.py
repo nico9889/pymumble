@@ -142,7 +142,7 @@ class CryptStateOCB2:
         head = bytes((eiv[0], *tag[:3]))
         return head + dst
 
-    def decrypt(self, source: bytes, len_plain: int) -> bytes:
+    def decrypt(self, source: bytes, len_plain: int | None = None) -> bytes:
         """
         Decrypt a message
 
@@ -161,6 +161,9 @@ class CryptStateOCB2:
         """
         if len(source) < 4:
             raise DecryptFailedException('Source <4 bytes long!')
+
+        if not len_plain:
+            len_plain = len(source) - 4  # The entire packet length, minus the header
 
         div = self.decrypt_iv.copy()
         ivbyte = source[0]
