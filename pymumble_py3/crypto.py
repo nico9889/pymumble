@@ -282,7 +282,7 @@ def ocb_encrypt(aes: object,
 
     checksum = xor(checksum, plain_block)
     encrypted_block = xor(pad, plain_block)
-    encrypted[pos:] = encrypted_block
+    encrypted[pos:] = encrypted_block[0:len_remaining]
 
     delta = xor(delta, S2(delta))
     tag = aes.encrypt(xor(delta, checksum))
